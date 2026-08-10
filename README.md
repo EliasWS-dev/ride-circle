@@ -57,3 +57,15 @@ FROM_EMAIL=rides@your-verified-domain.example
 ```
 
 `PORT` is supplied automatically by Render. Mail delivery errors are logged by the server but no longer prevent a participant from being saved.
+
+## Troubleshooting notifications
+
+Check the deployed configuration:
+
+```text
+https://YOUR-APP.onrender.com/api/health
+```
+
+It reports whether the API key and sender address are present, without revealing their values. If a message is not delivered, open the Render logs. The server prints the exact reason, for example a missing key, an invalid sender domain, or a rejection from Resend.
+
+Notifications are sent to the address entered in the optional notification field. If that field was left empty, the ride creator's e-mail address is used instead.

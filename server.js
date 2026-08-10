@@ -21,11 +21,18 @@ function dateLabel(date) { return new Intl.DateTimeFormat('en-US', { weekday: 'l
 async function readRides() { try { return JSON.parse(await fs.readFile(DATA_FILE, 'utf8')); } catch { return []; } }
 async function saveRides(rides) { await fs.mkdir(DATA_DIR, { recursive: true }); await fs.writeFile(DATA_FILE, JSON.stringify(rides, null, 2)); }
 function send(res, status, body) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(body)); }
+function mailConfig() { return { key: (process.env.RESEND_API_KEY || '').trim(), from: (process.env.FROM_EMAIL || '').trim() }; }
 async function notify(ride, subject, participant) {
-  if (!process.env.RESEND_API_KEY || !process.env.FROM_EMAIL || !ride.notifyEmail) return;
+  const { key, from } = mailConfig();
+  const to = ride.notifyEmail || ride.creator.email;
+  if (!key) return console.warn('Notification skipped: RESEND_API_KEY is not set.');
+  if (!validEmail(from)) return console.warn('Notification skipped: FROM_EMAIL is missing or invalid.');
+  if (!validEmail(to)) return console.warn('Notification skipped: the ride has no valid recipient address.');
   try {
-    const response = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: process.env.FROM_EMAIL, to: [ride.notifyEmail], subject, text: `${participant.name} (${participant.email}) ${subject.toLowerCase()} for your ${ride.date} ride.` }) });
-    if (!response.ok) console.error(`Resend rejected notification (${response.status}): ${await response.text()}`);
+    const response = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from, to: [to], subject, text: `${participant.name} (${participant.email}) ${subject.toLowerCase()} for your ${ride.date} ride at ${ride.time}.` }) });
+    const detail = await response.text();
+    if (!response.ok) return console.error(`Resend rejected the notification (${response.status}): ${detail}`);
+    console.log(`Notification sent to ${to}: ${detail}`);
   } catch (error) {
     console.error('Notification delivery failed:', error.message);
   }
@@ -36,6 +43,7 @@ function publicRide(ride) { return { id: ride.id, date: ride.date, time: ride.ti
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
+    if (req.method === 'GET' && url.pathname === '/api/health') { const { key, from } = mailConfig(); return send(res, 200, { storage: DATA_DIR, mail: { apiKeyConfigured: Boolean(key), fromConfigured: validEmail(from) } }); }
     if (req.method === 'GET' && url.pathname === '/api/config') { const dates = dateWindow(); return send(res, 200, { dates, labels: Object.fromEntries(dates.map(date => [date, dateLabel(date)])), today: todayUtc() }); }
     if (req.method === 'GET' && url.pathname === '/api/rides') {
       const dates = dateWindow(); const rides = await readRides();
