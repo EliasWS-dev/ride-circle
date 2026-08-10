@@ -5,7 +5,7 @@ const crypto = require('crypto');
 
 const PORT = Number(process.env.PORT || 3000);
 const ROOT = __dirname;
-const DATA_DIR = path.join(ROOT, 'data');
+const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'rides.json');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8' };
 const allowed = { intensity: ['Easy', 'Moderate', 'Hard'], length: ['Short', 'Medium', 'Long'] };
@@ -23,7 +23,12 @@ async function saveRides(rides) { await fs.mkdir(DATA_DIR, { recursive: true });
 function send(res, status, body) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(body)); }
 async function notify(ride, subject, participant) {
   if (!process.env.RESEND_API_KEY || !process.env.FROM_EMAIL || !ride.notifyEmail) return;
-  await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: process.env.FROM_EMAIL, to: [ride.notifyEmail], subject, text: `${participant.name} (${participant.email}) ${subject.toLowerCase()} for your ${ride.date} ride.` }) });
+  try {
+    const response = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: process.env.FROM_EMAIL, to: [ride.notifyEmail], subject, text: `${participant.name} (${participant.email}) ${subject.toLowerCase()} for your ${ride.date} ride.` }) });
+    if (!response.ok) console.error(`Resend rejected notification (${response.status}): ${await response.text()}`);
+  } catch (error) {
+    console.error('Notification delivery failed:', error.message);
+  }
 }
 async function body(req) { let raw = ''; for await (const chunk of req) raw += chunk; return JSON.parse(raw || '{}'); }
 function publicRide(ride) { return { id: ride.id, date: ride.date, time: ride.time, intensity: ride.intensity, length: ride.length, creator: { name: ride.creator.name }, participants: ride.participants.map(({ email, ...p }) => p) }; }
