@@ -1,0 +1,8 @@
+{
+  "name": "ride-circle",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A server-backed bike ride planner for friends",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" }
+}
