@@ -18,8 +18,24 @@ function dateWindow() {
 function clean(value, max = 120) { return typeof value === 'string' ? value.trim().slice(0, max) : ''; }
 function validEmail(value) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value); }
 function dateLabel(date) { return new Intl.DateTimeFormat('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC' }).format(new Date(`${date}T12:00:00Z`)); }
-async function readRides() { try { return JSON.parse(await fs.readFile(DATA_FILE, 'utf8')); } catch { return []; } }
-async function saveRides(rides) { await fs.mkdir(DATA_DIR, { recursive: true }); await fs.writeFile(DATA_FILE, JSON.stringify(rides, null, 2)); }
+const db = { url: (process.env.SUPABASE_URL || '').trim().replace(/\/+$/, ''), key: (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim(), table: (process.env.SUPABASE_TABLE || 'rides').trim() };
+function dbEnabled() { return Boolean(db.url && db.key); }
+async function dbRequest(method, query, payload, prefer) {
+  const response = await fetch(`${db.url}/rest/v1/${db.table}${query}`, { method, headers: { apikey: db.key, Authorization: `Bearer ${db.key}`, 'Content-Type': 'application/json', ...(prefer ? { Prefer: prefer } : {}) }, ...(payload ? { body: JSON.stringify(payload) } : {}) });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`Supabase ${method} failed (${response.status}): ${text}`);
+  return text ? JSON.parse(text) : null;
+}
+async function readRides() {
+  if (dbEnabled()) return (await dbRequest('GET', '?select=data&order=created_at.asc')).map(row => row.data);
+  try { return JSON.parse(await fs.readFile(DATA_FILE, 'utf8')); } catch { return []; }
+}
+async function saveRidesFile(rides) { await fs.mkdir(DATA_DIR, { recursive: true }); await fs.writeFile(DATA_FILE, JSON.stringify(rides, null, 2)); }
+async function persistRide(rides, ride, isNew = false) {
+  if (!dbEnabled()) return saveRidesFile(rides);
+  if (isNew) return dbRequest('POST', '', { id: ride.id, data: ride }, 'return=minimal');
+  return dbRequest('PATCH', `?id=eq.${encodeURIComponent(ride.id)}`, { data: ride }, 'return=minimal');
+}
 function send(res, status, body) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(body)); }
 function mailConfig() { return { key: (process.env.RESEND_API_KEY || '').trim(), from: (process.env.FROM_EMAIL || '').trim() }; }
 async function notify(ride, subject, participant) {
@@ -43,7 +59,11 @@ function publicRide(ride) { return { id: ride.id, date: ride.date, time: ride.ti
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
-    if (req.method === 'GET' && url.pathname === '/api/health') { const { key, from } = mailConfig(); return send(res, 200, { storage: DATA_DIR, mail: { apiKeyConfigured: Boolean(key), fromConfigured: validEmail(from) } }); }
+    if (req.method === 'GET' && url.pathname === '/api/health') {
+      const { key, from } = mailConfig(); let storageReachable = null;
+      if (dbEnabled()) { try { await dbRequest('GET', '?select=id&limit=1'); storageReachable = true; } catch (error) { console.error(error.message); storageReachable = false; } }
+      return send(res, 200, { storage: dbEnabled() ? 'supabase' : `file:${DATA_DIR}`, storageReachable, durable: dbEnabled(), mail: { apiKeyConfigured: Boolean(key), fromConfigured: validEmail(from) } });
+    }
     if (req.method === 'GET' && url.pathname === '/api/config') { const dates = dateWindow(); return send(res, 200, { dates, labels: Object.fromEntries(dates.map(date => [date, dateLabel(date)])), today: todayUtc() }); }
     if (req.method === 'GET' && url.pathname === '/api/rides') {
       const dates = dateWindow(); const rides = await readRides();
@@ -54,14 +74,14 @@ const server = http.createServer(async (req, res) => {
       const date = clean(input.date, 10); const time = clean(input.time, 5); const intensity = clean(input.intensity, 20); const length = clean(input.length, 20); const notifyEmail = clean(input.notifyEmail, 160).toLowerCase();
       if (!name || !validEmail(email) || !dateWindow().includes(date) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time) || !allowed.intensity.includes(intensity) || !allowed.length.includes(length) || (notifyEmail && !validEmail(notifyEmail))) return send(res, 400, { error: 'Please complete every field with valid values.' });
       const rides = await readRides(); const ride = { id: crypto.randomUUID(), date, time, intensity, length, notifyEmail, createdAt: new Date().toISOString(), creator: { name, email }, participants: [{ name, email }] };
-      rides.push(ride); await saveRides(rides); return send(res, 201, publicRide(ride));
+      rides.push(ride); await persistRide(rides, ride, true); return send(res, 201, publicRide(ride));
     }
     const joinMatch = url.pathname.match(/^\/api\/rides\/([^/]+)\/join$/);
     if (req.method === 'POST' && joinMatch) {
       const input = await body(req); const name = clean(input.name, 80); const email = clean(input.email, 160).toLowerCase();
       if (!name || !validEmail(email)) return send(res, 400, { error: 'Name and a valid e-mail are required.' });
       const rides = await readRides(); const ride = rides.find(r => r.id === joinMatch[1]); if (!ride || !dateWindow().includes(ride.date)) return send(res, 404, { error: 'That ride is no longer available.' });
-      if (!ride.participants.some(p => p.email === email)) { ride.participants.push({ name, email }); await saveRides(rides); await notify(ride, 'Someone joined your ride', { name, email }); }
+      if (!ride.participants.some(p => p.email === email)) { ride.participants.push({ name, email }); await persistRide(rides, ride); await notify(ride, 'Someone joined your ride', { name, email }); }
       return send(res, 200, publicRide(ride));
     }
     const leaveMatch = url.pathname.match(/^\/api\/rides\/([^/]+)\/leave$/);
@@ -70,7 +90,7 @@ const server = http.createServer(async (req, res) => {
       if (!ride || !validEmail(email)) return send(res, 400, { error: 'Enter the e-mail used to join this ride.' });
       if (ride.creator.email === email) return send(res, 400, { error: 'The ride creator cannot leave. Ask a friend to create a replacement ride.' });
       const before = ride.participants.length; ride.participants = ride.participants.filter(p => p.email !== email); if (before === ride.participants.length) return send(res, 404, { error: 'No participant with that e-mail was found.' });
-      await saveRides(rides); await notify(ride, 'Someone left your ride', { name: 'A participant', email }); return send(res, 200, publicRide(ride));
+      await persistRide(rides, ride); await notify(ride, 'Someone left your ride', { name: 'A participant', email }); return send(res, 200, publicRide(ride));
     }
     if (req.method === 'GET') { const file = url.pathname === '/' ? 'index.html' : url.pathname.slice(1); const filePath = path.resolve(ROOT, file); if (!filePath.startsWith(ROOT) || !MIME[path.extname(filePath)]) return send(res, 404, { error: 'Not found' }); res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath)] }); return res.end(await fs.readFile(filePath)); }
     send(res, 404, { error: 'Not found' });

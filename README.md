@@ -37,24 +37,38 @@ git commit -m "Update persistence and notifications"
 git push origin main
 ```
 
-## Render storage
+## Durable storage with Supabase
 
-Render's normal filesystem is temporary. To keep rides and participants after restarts, add a persistent disk to the Render Web Service:
+Render's filesystem is temporary, so a JSON file is lost whenever the service restarts, sleeps, or redeploys. On Render's free plan the rides must therefore live in an external database.
 
-```text
-Mount path: /var/data
-Environment variable: DATA_DIR=/var/data
+The server talks to Supabase through its REST API using `fetch`, so no extra npm packages are required. Create the table once in the Supabase SQL editor:
+
+```sql
+create table public.rides (
+  id uuid primary key,
+  data jsonb not null,
+  created_at timestamptz not null default now()
+);
+
+alter table public.rides enable row level security;
 ```
 
-The service must have permission to write to that mounted path. Alternatively, use a managed database for production or multiple instances.
+Row Level Security stays enabled and no public policy is added. Only the server may read or write, because it authenticates with the secret service role key. That key must never be used in browser code.
+
+Copy the project URL and the service role key from **Project Settings → API**.
+
+If `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are absent, the server falls back to the local file in `DATA_DIR`, which is convenient for development but not durable on Render.
 
 ## Render environment variables
 
 ```text
-DATA_DIR=/var/data
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 RESEND_API_KEY=re_...
 FROM_EMAIL=rides@your-verified-domain.example
 ```
+
+Optional: `SUPABASE_TABLE` overrides the table name, and `DATA_DIR` sets the local fallback directory.
 
 `PORT` is supplied automatically by Render. Mail delivery errors are logged by the server but no longer prevent a participant from being saved.
 
@@ -66,6 +80,6 @@ Check the deployed configuration:
 https://YOUR-APP.onrender.com/api/health
 ```
 
-It reports whether the API key and sender address are present, without revealing their values. If a message is not delivered, open the Render logs. The server prints the exact reason, for example a missing key, an invalid sender domain, or a rejection from Resend.
+It reports whether storage is durable, whether Supabase is reachable, and whether the mail settings are present, without revealing any secret values. If a message is not delivered, open the Render logs. The server prints the exact reason, for example a missing key, an invalid sender domain, or a rejection from Resend.
 
 Notifications are sent to the address entered in the optional notification field. If that field was left empty, the ride creator's e-mail address is used instead.
