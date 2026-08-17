@@ -95,4 +95,6 @@ Common causes of a storage error:
 - Status 403 with code `42501` means the key is right but the grants above were never applied.
 - The Supabase project is paused after a long period of inactivity. If a message is not delivered, open the Render logs. The server prints the exact reason, for example a missing key, an invalid sender domain, or a rejection from Resend.
 
-Notifications are sent to the address entered in the optional notification field. If that field was left empty, the ride creator's e-mail address is used instead.
+The interface and the e-mails are in German. Notifications are controlled by a checkbox in the create form: when it is ticked, the e-mail address entered in that same form receives a message whenever somebody joins or leaves. When it is unticked, no notification is stored and none is sent.
+
+For local testing, `RESEND_API_URL` can point the mail call at a mock endpoint instead of Resend.
