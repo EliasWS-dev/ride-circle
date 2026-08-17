@@ -27,7 +27,7 @@ async function dbRequest(method, query, payload, prefer) {
   return text ? JSON.parse(text) : null;
 }
 async function readRides() {
-  if (dbEnabled()) return (await dbRequest('GET', '?select=data&order=created_at.asc')).map(row => row.data);
+  if (dbEnabled()) return (await dbRequest('GET', '?select=data')).map(row => row.data).filter(Boolean).sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
   try { return JSON.parse(await fs.readFile(DATA_FILE, 'utf8')); } catch { return []; }
 }
 async function saveRidesFile(rides) { await fs.mkdir(DATA_DIR, { recursive: true }); await fs.writeFile(DATA_FILE, JSON.stringify(rides, null, 2)); }
@@ -60,9 +60,9 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (req.method === 'GET' && url.pathname === '/api/health') {
-      const { key, from } = mailConfig(); let storageReachable = null;
-      if (dbEnabled()) { try { await dbRequest('GET', '?select=id&limit=1'); storageReachable = true; } catch (error) { console.error(error.message); storageReachable = false; } }
-      return send(res, 200, { storage: dbEnabled() ? 'supabase' : `file:${DATA_DIR}`, storageReachable, durable: dbEnabled(), mail: { apiKeyConfigured: Boolean(key), fromConfigured: validEmail(from) } });
+      const { key, from } = mailConfig(); let storageReachable = null; let storageError = null;
+      if (dbEnabled()) { try { await dbRequest('GET', '?select=data&limit=1'); storageReachable = true; } catch (error) { console.error(error.message); storageReachable = false; storageError = error.message; } }
+      return send(res, 200, { storage: dbEnabled() ? 'supabase' : `file:${DATA_DIR}`, table: db.table, storageReachable, storageError, durable: dbEnabled(), mail: { apiKeyConfigured: Boolean(key), fromConfigured: validEmail(from) } });
     }
     if (req.method === 'GET' && url.pathname === '/api/config') { const dates = dateWindow(); return send(res, 200, { dates, labels: Object.fromEntries(dates.map(date => [date, dateLabel(date)])), today: todayUtc() }); }
     if (req.method === 'GET' && url.pathname === '/api/rides') {
@@ -94,6 +94,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET') { const file = url.pathname === '/' ? 'index.html' : url.pathname.slice(1); const filePath = path.resolve(ROOT, file); if (!filePath.startsWith(ROOT) || !MIME[path.extname(filePath)]) return send(res, 404, { error: 'Not found' }); res.writeHead(200, { 'Content-Type': MIME[path.extname(filePath)] }); return res.end(await fs.readFile(filePath)); }
     send(res, 404, { error: 'Not found' });
-  } catch (error) { console.error(error); send(res, 500, { error: 'The server could not complete that request.' }); }
+  } catch (error) {
+    console.error(error);
+    const storageIssue = error.message.startsWith('Supabase');
+    send(res, storageIssue ? 503 : 500, { error: storageIssue ? 'The ride database is not reachable. Check /api/health for details.' : 'The server could not complete that request.' });
+  }
 });
 server.listen(PORT, () => console.log(`Ride Circle running at http://localhost:${PORT}`));

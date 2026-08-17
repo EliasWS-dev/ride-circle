@@ -80,6 +80,13 @@ Check the deployed configuration:
 https://YOUR-APP.onrender.com/api/health
 ```
 
-It reports whether storage is durable, whether Supabase is reachable, and whether the mail settings are present, without revealing any secret values. If a message is not delivered, open the Render logs. The server prints the exact reason, for example a missing key, an invalid sender domain, or a rejection from Resend.
+It reports whether storage is durable, whether Supabase is reachable, and whether the mail settings are present, without revealing any secret values. When storage fails, `storageError` contains the exact message returned by Supabase, and the ride endpoints answer with status 503 instead of a generic error.
+
+Common causes of a storage error:
+
+- The `rides` table was not created, or it lives in a schema other than `public`.
+- `SUPABASE_URL` is wrong; it must look like `https://<project-ref>.supabase.co`.
+- The publishable key was used instead of the service role key, so Row Level Security blocks access.
+- The Supabase project is paused after a long period of inactivity. If a message is not delivered, open the Render logs. The server prints the exact reason, for example a missing key, an invalid sender domain, or a rejection from Resend.
 
 Notifications are sent to the address entered in the optional notification field. If that field was left empty, the ride creator's e-mail address is used instead.
