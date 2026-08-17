@@ -51,7 +51,12 @@ create table public.rides (
 );
 
 alter table public.rides enable row level security;
+
+grant usage on schema public to service_role;
+grant select, insert, update, delete on public.rides to service_role;
 ```
+
+The grants matter. The service role bypasses Row Level Security, but it still needs ordinary table privileges. Without them Supabase answers with `42501 permission denied for table rides`.
 
 Row Level Security stays enabled and no public policy is added. Only the server may read or write, because it authenticates with the secret service role key. That key must never be used in browser code.
 
@@ -87,6 +92,7 @@ Common causes of a storage error:
 - The `rides` table was not created, or it lives in a schema other than `public`.
 - `SUPABASE_URL` is wrong; it must look like `https://<project-ref>.supabase.co`.
 - The publishable key was used instead of the service role key, so Row Level Security blocks access.
+- Status 403 with code `42501` means the key is right but the grants above were never applied.
 - The Supabase project is paused after a long period of inactivity. If a message is not delivered, open the Render logs. The server prints the exact reason, for example a missing key, an invalid sender domain, or a rejection from Resend.
 
 Notifications are sent to the address entered in the optional notification field. If that field was left empty, the ride creator's e-mail address is used instead.
